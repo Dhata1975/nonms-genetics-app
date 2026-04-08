@@ -548,6 +548,15 @@ def load_datasets_cached():
 def main():
     st.set_page_config(page_title="NONMS Genetics Engine", layout="wide")
     st.title("NONMS Genetics Engine")
+    st.markdown("""
+### ⚠️ Privacy Notice
+
+- Uploaded DNA files are processed temporarily and not stored  
+- This tool is for research and pattern exploration only  
+- Not intended for diagnosis or medical advice  
+
+---
+""")
     st.caption("Upload an AncestryDNA raw file and compare it against the bundled MS and pathway marker sets.")
 
     with st.expander("What is included in v3?", expanded=False):
