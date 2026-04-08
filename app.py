@@ -20,7 +20,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -446,16 +446,75 @@ def make_excel_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, ances
     return output.getvalue()
 
 
+
 def draw_pdf_header(canvas, doc):
     canvas.saveState()
-    canvas.setFillColor(colors.HexColor("#0A0A0A"))
-    canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], fill=1, stroke=0)
+    page_w, page_h = doc.pagesize
+
+    canvas.setFillColor(colors.HexColor("#070A0F"))
+    canvas.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+
+    canvas.setFillColor(colors.HexColor("#0F1724"))
+    canvas.rect(0.45 * inch, page_h - 0.95 * inch, page_w - 0.9 * inch, 0.42 * inch, fill=1, stroke=0)
+
     canvas.setFillColor(colors.HexColor("#D4AF37"))
-    canvas.rect(0.5 * inch, doc.pagesize[1] - 0.8 * inch, doc.pagesize[0] - inch, 0.08 * inch, fill=1, stroke=0)
+    canvas.rect(0.45 * inch, page_h - 0.53 * inch, page_w - 0.9 * inch, 0.05 * inch, fill=1, stroke=0)
+
+    canvas.setFillColor(colors.HexColor("#8FA7C6"))
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawString(0.62 * inch, page_h - 0.79 * inch, "AREA 76 // NONMS COMMAND CENTER")
+
     canvas.setFillColor(colors.white)
     canvas.setFont("Helvetica-Bold", 9)
-    canvas.drawRightString(doc.pagesize[0] - 0.6 * inch, 0.45 * inch, f"Page {doc.page}")
+    canvas.drawRightString(page_w - 0.62 * inch, page_h - 0.79 * inch, "GENETICS SIGNAL REPORT")
+
+    canvas.setFillColor(colors.HexColor("#7E8798"))
+    canvas.setFont("Helvetica", 8.5)
+    canvas.drawString(0.62 * inch, 0.38 * inch, "Pattern comparison only. Not a diagnosis or medical advice.")
+    canvas.drawRightString(page_w - 0.62 * inch, 0.38 * inch, f"Page {doc.page}")
     canvas.restoreState()
+
+
+def _metric_card(label: str, value: str, width: float):
+    data = [[label], [value]]
+    t = Table(data, colWidths=[width])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#13263A")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#9FB6D5")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 8),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#10151E")),
+        ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#F5E8B1")),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 1), (-1, 1), 15),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#D4AF37")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return t
+
+
+def _section_table(data, col_widths):
+    table = Table(data, repeatRows=1, colWidths=col_widths)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#10151E")),
+        ("TEXTCOLOR", (0, 1), (-1, -1), colors.white),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#10151E"), colors.HexColor("#0C1118")]),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#505A69")),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.2),
+        ("LEADING", (0, 0), (-1, -1), 10.5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return table
 
 
 def make_pdf_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, volunteer_filename: str) -> bytes:
@@ -463,89 +522,224 @@ def make_pdf_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, volunte
     doc = SimpleDocTemplate(
         buffer,
         pagesize=letter,
-        leftMargin=0.7 * inch,
-        rightMargin=0.7 * inch,
-        topMargin=0.9 * inch,
-        bottomMargin=0.7 * inch,
+        leftMargin=0.62 * inch,
+        rightMargin=0.62 * inch,
+        topMargin=1.05 * inch,
+        bottomMargin=0.65 * inch,
     )
+
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="TitleGold", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=colors.HexColor("#D4AF37")))
-    styles.add(ParagraphStyle(name="BodyWhite", parent=styles["BodyText"], fontName="Helvetica", fontSize=9.5, leading=13, textColor=colors.white))
-    styles.add(ParagraphStyle(name="HeadingGold", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=16, textColor=colors.HexColor("#D4AF37"), spaceAfter=8, spaceBefore=8))
+    styles.add(ParagraphStyle(
+        name="A76_Kicker",
+        parent=styles["BodyText"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor("#8FA7C6"),
+        spaceAfter=4,
+    ))
+    styles.add(ParagraphStyle(
+        name="A76_Title",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=24,
+        leading=28,
+        textColor=colors.HexColor("#F5E8B1"),
+        spaceAfter=6,
+    ))
+    styles.add(ParagraphStyle(
+        name="A76_Subtitle",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=colors.white,
+        spaceAfter=8,
+    ))
+    styles.add(ParagraphStyle(
+        name="A76_Label",
+        parent=styles["BodyText"],
+        fontName="Helvetica-Bold",
+        fontSize=11.5,
+        leading=14,
+        textColor=colors.HexColor("#D4AF37"),
+        spaceBefore=8,
+        spaceAfter=6,
+    ))
+    styles.add(ParagraphStyle(
+        name="A76_Body",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9.4,
+        leading=13,
+        textColor=colors.white,
+    ))
+    styles.add(ParagraphStyle(
+        name="A76_Small",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=8.4,
+        leading=11,
+        textColor=colors.HexColor("#C8D0DE"),
+    ))
 
     story = []
-    story.append(Paragraph("NONMS Genetics Comparison Report", styles["TitleGold"]))
-    story.append(Spacer(1, 0.12 * inch))
-    story.append(Paragraph(f"Volunteer file: {volunteer_filename}", styles["BodyWhite"]))
-    story.append(Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", styles["BodyWhite"]))
-    story.append(Spacer(1, 0.18 * inch))
-    story.append(Paragraph("This report is a pattern-comparison tool only. It is not a diagnosis, medical interpretation, or validated polygenic risk score.", styles["BodyWhite"]))
+
+    # Cover / executive page
+    story.append(Paragraph("AREA 76 // NONMS COMMAND CENTER", styles["A76_Kicker"]))
+    story.append(Paragraph("GENETICS SIGNAL REPORT", styles["A76_Title"]))
+    story.append(Paragraph(
+        "Volunteer upload processed through bundled MS and pathway marker sets. "
+        "This report is structured as a command summary: high-level signal first, drill-down second.",
+        styles["A76_Subtitle"],
+    ))
+
+    meta_table = _section_table(
+        [
+            ["Volunteer File", "Generated (UTC)", "Report Mode"],
+            [clean_excel_value(volunteer_filename), datetime.utcnow().strftime("%Y-%m-%d %H:%M"), "Pattern comparison"],
+        ],
+        [2.85 * inch, 2.0 * inch, 1.6 * inch],
+    )
+    story.append(meta_table)
+    story.append(Spacer(1, 0.16 * inch))
+
+    total_rows = len(all_results)
+    comparable = int(summary_df["directly_comparable_rows"].sum()) if not summary_df.empty else 0
+    present = int(summary_df["present_in_ancestry"].sum()) if not summary_df.empty else 0
+    hits = int((summary_df["listed_allele_present"] + summary_df["marker_present_no_allele"]).sum()) if not summary_df.empty else 0
+
+    cards = Table([[
+        _metric_card("Datasets", str(summary_df["category"].nunique() if not summary_df.empty else 0), 1.45 * inch),
+        _metric_card("Marker rows", str(total_rows), 1.55 * inch),
+        _metric_card("Comparable", str(comparable), 1.45 * inch),
+        _metric_card("Present in file", str(present), 1.55 * inch),
+        _metric_card("Positive hits", str(hits), 1.45 * inch),
+    ]], colWidths=[1.45 * inch, 1.55 * inch, 1.45 * inch, 1.55 * inch, 1.45 * inch])
+    cards.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP")]))
+    story.append(cards)
     story.append(Spacer(1, 0.18 * inch))
 
-    story.append(Paragraph("Category Summary", styles["HeadingGold"]))
-    summary_table_data = [["Category", "Rows", "Comparable", "Present", "Hits", "Missing", "Coverage %"]]
-    for _, row in summary_df.iterrows():
-        summary_table_data.append([
+    story.append(Paragraph("Mission Guardrails", styles["A76_Label"]))
+    story.append(Paragraph(
+        "Treat every match here as a pattern signal, not a conclusion. Marker presence can support hypothesis generation "
+        "and comparison across volunteers, but it does not prove disease, rule disease out, or replace clinical interpretation.",
+        styles["A76_Body"],
+    ))
+    story.append(Spacer(1, 0.14 * inch))
+
+    top_summary = summary_df.copy()
+    if not top_summary.empty:
+        top_summary["signal_call"] = top_summary["match_pct_when_present"].apply(signal_from_hit_pct)
+        top_summary = top_summary.sort_values(
+            by=["match_pct_when_present", "present_in_ancestry", "rows"],
+            ascending=[False, False, False],
+            na_position="last",
+        )
+
+    story.append(Paragraph("Executive Signal Board", styles["A76_Label"]))
+    summary_data = [[
+        "Category", "Rows", "Present", "Hits", "Coverage %", "Match %", "Signal Call"
+    ]]
+    for _, row in top_summary.iterrows():
+        summary_data.append([
             str(row["category"]),
             int(row["rows"]),
-            int(row["directly_comparable_rows"]),
             int(row["present_in_ancestry"]),
             int(row["listed_allele_present"] + row["marker_present_no_allele"]),
-            int(row["missing_from_ancestry"]),
             "-" if pd.isna(row["coverage_pct_of_comparable"]) else f'{row["coverage_pct_of_comparable"]:.1f}',
+            "-" if pd.isna(row["match_pct_when_present"]) else f'{row["match_pct_when_present"]:.1f}',
+            str(row["signal_call"]),
         ])
+    story.append(_section_table(summary_data, [2.1 * inch, 0.55 * inch, 0.7 * inch, 0.55 * inch, 0.8 * inch, 0.72 * inch, 1.15 * inch]))
+    story.append(Spacer(1, 0.15 * inch))
 
-    table = Table(summary_table_data, repeatRows=1, colWidths=[2.0 * inch, 0.65 * inch, 0.8 * inch, 0.65 * inch, 0.55 * inch, 0.7 * inch, 0.75 * inch])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#111111")),
-        ("TEXTCOLOR", (0, 1), (-1, -1), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#555555")),
-        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("LEADING", (0, 0), (-1, -1), 11),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-    story.append(table)
+    top_hits = all_results[all_results["comparison_status"].isin(["Listed allele present", "Marker present", "Possible exact multibase match"])].copy()
+    story.append(Paragraph("Command Readout", styles["A76_Label"]))
+    if not top_hits.empty:
+        by_cat = top_hits.groupby("category").size().sort_values(ascending=False).head(6)
+        readout_lines = [f"<b>{cat}</b>: {count} positive row(s)" for cat, count in by_cat.items()]
+        story.append(Paragraph(" • ".join(readout_lines), styles["A76_Body"]))
+    else:
+        story.append(Paragraph("No direct positive rows were detected in the selected categories.", styles["A76_Body"]))
+
     story.append(PageBreak())
 
-    for category in summary_df["category"].tolist():
+    # Per-category pages
+    for category in top_summary["category"].tolist():
+        cat_summary = top_summary[top_summary["category"] == category].iloc[0]
         grp = all_results[all_results["category"] == category].copy()
-        grp = grp[["raw_marker", "rsid", "listed_allele", "genotype", "comparison_status"]].head(20)
-        story.append(Paragraph(category, styles["HeadingGold"]))
-        story.append(Paragraph("Top rows shown below (up to 20). Full details are available in the Excel export.", styles["BodyWhite"]))
-        cat_data = [["Marker", "rsID", "Allele", "Genotype", "Status"]]
-        for _, r in grp.iterrows():
-            cat_data.append([
-                str(r["raw_marker"])[:28],
-                str(r["rsid"] or ""),
-                str(r["listed_allele"] or ""),
-                str(r["genotype"] or ""),
-                str(r["comparison_status"] or ""),
-            ])
-        cat_table = Table(cat_data, repeatRows=1, colWidths=[1.7 * inch, 1.1 * inch, 0.55 * inch, 0.75 * inch, 2.5 * inch])
-        cat_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#111111")),
-            ("TEXTCOLOR", (0, 1), (-1, -1), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#555555")),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("LEADING", (0, 0), (-1, -1), 10),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+
+        signal = str(cat_summary["signal_call"])
+        coverage = "-" if pd.isna(cat_summary["coverage_pct_of_comparable"]) else f'{cat_summary["coverage_pct_of_comparable"]:.1f}%'
+        match_pct = "-" if pd.isna(cat_summary["match_pct_when_present"]) else f'{cat_summary["match_pct_when_present"]:.1f}%'
+
+        story.append(KeepTogether([
+            Paragraph(category, styles["A76_Title"]),
+            Paragraph(
+                f"Signal call: <b>{signal}</b> &nbsp;&nbsp;|&nbsp;&nbsp; Coverage: <b>{coverage}</b> &nbsp;&nbsp;|&nbsp;&nbsp; Match when present: <b>{match_pct}</b>",
+                styles["A76_Subtitle"],
+            ),
         ]))
-        story.append(cat_table)
+
+        mini = _section_table(
+            [
+                ["Rows", "Comparable", "Present", "Hits", "Missing", "Manual Review"],
+                [
+                    int(cat_summary["rows"]),
+                    int(cat_summary["directly_comparable_rows"]),
+                    int(cat_summary["present_in_ancestry"]),
+                    int(cat_summary["listed_allele_present"] + cat_summary["marker_present_no_allele"]),
+                    int(cat_summary["missing_from_ancestry"]),
+                    int(cat_summary["manual_review_rows"]),
+                ],
+            ],
+            [0.8 * inch, 1.0 * inch, 0.8 * inch, 0.7 * inch, 0.8 * inch, 1.05 * inch],
+        )
+        story.append(mini)
         story.append(Spacer(1, 0.12 * inch))
+
+        positives = grp[grp["comparison_status"].isin(["Listed allele present", "Marker present", "Possible exact multibase match"])].copy().head(12)
+        manual = grp[grp["manual_review"] != "No"].copy().head(10)
+
+        story.append(Paragraph("Positive Signal Rows", styles["A76_Label"]))
+        if positives.empty:
+            story.append(Paragraph("No direct positive rows in this category for the current volunteer file.", styles["A76_Body"]))
+        else:
+            pos_data = [["Marker", "rsID", "Allele", "Genotype", "Status"]]
+            for _, r in positives.iterrows():
+                pos_data.append([
+                    str(r["raw_marker"])[:30],
+                    str(r["rsid"] or ""),
+                    str(r["listed_allele"] or ""),
+                    str(r["genotype"] or ""),
+                    str(r["comparison_status"] or ""),
+                ])
+            story.append(_section_table(pos_data, [2.05 * inch, 1.1 * inch, 0.55 * inch, 0.8 * inch, 2.2 * inch]))
+
+        story.append(Spacer(1, 0.12 * inch))
+        story.append(Paragraph("Manual Review Flags", styles["A76_Label"]))
+        if manual.empty:
+            story.append(Paragraph("No manual-review rows surfaced in the top slice for this category.", styles["A76_Body"]))
+        else:
+            man_data = [["Marker", "rsID", "Issue", "Note"]]
+            for _, r in manual.iterrows():
+                man_data.append([
+                    str(r["raw_marker"])[:28],
+                    str(r["rsid"] or ""),
+                    str(r["marker_type"] or ""),
+                    str(r["note"] or "")[:52],
+                ])
+            story.append(_section_table(man_data, [1.95 * inch, 1.05 * inch, 1.25 * inch, 2.75 * inch]))
+
+        story.append(Spacer(1, 0.12 * inch))
+        story.append(Paragraph(
+            "Analyst note: use the Excel export for complete row-level detail, especially when a category contains HLA entries, composite markers, or unknown alleles.",
+            styles["A76_Small"],
+        ))
+
+        if category != top_summary["category"].tolist()[-1]:
+            story.append(PageBreak())
 
     doc.build(story, onFirstPage=draw_pdf_header, onLaterPages=draw_pdf_header)
     return buffer.getvalue()
