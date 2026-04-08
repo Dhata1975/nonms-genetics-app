@@ -1,0 +1,7 @@
+1	Autonomic Loop  rs12974991
+2	Autonomic Loop  rs1801253
+3	Autonomic Loop	rs1360780
+4	Autonomic Loop	rs4680
+5	Autonomic Loop	rs1799983
+6	Autonomic Loop	rs1799752
+7	Autonomic Loop	rs12465214

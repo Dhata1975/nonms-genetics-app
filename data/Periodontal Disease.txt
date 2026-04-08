@@ -1,0 +1,4 @@
+1	Periodontal
+Disease	rs1800587
+2	Periodontal
+Disease	rs1143634

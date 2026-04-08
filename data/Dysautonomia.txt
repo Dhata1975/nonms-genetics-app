@@ -1,0 +1,21 @@
+1	Familial Dysautonomia (HSAN III)	rs121918694
+2	HSAN II	rs146267537
+3	HSAN IIB	rs143312367
+4	HSAN IIC	rs121908025
+5	HSAN IID	rs6746030
+6	HSAN VII	rs3812718
+7	HSAN VIII	rs200972132
+8	HSAN V	rs6330
+9	HSAN IV (CIPA)	rs6336
+10	HSAN I	rs10142020
+11	CMT2B	rs150328802
+12	HSAN VI	rs77959721
+13	HSAN IE / ADCA-DN	rs61749966
+14	DBH deficiency	rs1611115
+15	Congenital Central Hypoventilation	rs1799931
+16	Triple-A Syndrome	rs121918268
+17	Hereditary Transthyretin Amyloidosis (ATTRv)	rs28933979
+18	Fabry Disease	rs104894845
+19	CANVAS Spectrum	rs912823
+20	Familial Orthostatic Intolerance / POTS subset	rs1805065
+21	Tyrosine Hydroxylase Deficiency	rs6356

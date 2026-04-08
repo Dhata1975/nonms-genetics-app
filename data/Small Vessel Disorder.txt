@@ -1,0 +1,5 @@
+1 Small Vessel Disorder	rs7090046
+2 Small Vessel Disorder	rs3918226
+3 Small Vessel Disorder	rs2300782
+4 Small Vessel Disorder	rs10519765
+5 Small Vessel Disorder	rs476141
