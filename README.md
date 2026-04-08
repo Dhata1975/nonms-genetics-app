@@ -73,3 +73,10 @@ This package includes an Area 76 style command-center UI refresh:
 ## v5 export fix
 - hardened Excel export against duplicate sheet names and illegal characters
 - separated Excel, PDF, and CSV export generation so one failure does not crash the app
+
+
+## v7 dual-mode PDF
+- added dual-mode PDF system
+- print-friendly light report for paper printing
+- retained Area 76 command-center dark report for on-screen use
+- export tab now supports style selection
