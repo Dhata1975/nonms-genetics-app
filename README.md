@@ -58,3 +58,18 @@ For a cleaner URL such as `genetics.nonms.com`, self-host Streamlit and put it b
 
 ## Important note
 This is a pattern comparison tool. It does not diagnose disease, provide medical advice, or produce a validated polygenic risk score.
+
+
+## v4 UI refresh
+This package includes an Area 76 style command-center UI refresh:
+- hero command header
+- privacy and mission guardrails panels
+- cleaned metric cards
+- command summary tab
+- manual review tab
+- stronger dark/gold visual system
+
+
+## v5 export fix
+- hardened Excel export against duplicate sheet names and illegal characters
+- separated Excel, PDF, and CSV export generation so one failure does not crash the app

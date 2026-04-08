@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from collections import defaultdict
 
 import pandas as pd
 import streamlit as st
@@ -54,7 +55,7 @@ DISPLAY_NAMES = {
     "Molecular Mimicry.txt": "Molecular Mimicry",
     "CSVD.txt": "CSVD",
     "Homocysteine.txt": "Homocysteine",
-    "Mold Fungus.txt": "Mold/Fungus",
+    "Mold Fungus.txt": "Mold / Fungus",
     "Tinea Versicolor.txt": "Tinea Versicolor",
     "H Pylori.txt": "H. pylori",
     "Cardiomegaly.txt": "Cardiomegaly",
@@ -77,6 +78,32 @@ def normalize_category_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")[:31] or "Sheet"
 
 
+def make_unique_sheet_name(base: str, used_names: set[str]) -> str:
+    base = (base or "Sheet")[:31]
+    if base not in used_names:
+        used_names.add(base)
+        return base
+    i = 2
+    while True:
+        suffix = f"_{i}"
+        candidate = f"{base[:31-len(suffix)]}{suffix}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        i += 1
+
+
+def clean_excel_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool)):
+        return value
+    s = str(value)
+    # Remove control characters that can break openpyxl
+    s = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+    return s
+
+
 def parse_marker_token(token: str) -> tuple[Optional[str], Optional[str], str, str]:
     token = str(token).strip()
     if not token:
@@ -86,7 +113,7 @@ def parse_marker_token(token: str) -> tuple[Optional[str], Optional[str], str, s
         rsids = re.findall(r"rs\d+", token)
         if len(rsids) == 1:
             return rsids[0], None, "composite", "Composite marker; manual review needed"
-        return None, None, "composite", "Composite marker/haplotype entry; manual review needed"
+        return None, None, "composite", "Composite marker / haplotype entry; manual review needed"
 
     if token.startswith("DRB") or token.startswith("A*") or "*" in token:
         return None, None, "hla", "HLA allele entry; not directly testable from standard Ancestry raw SNP export"
@@ -103,7 +130,7 @@ def parse_marker_token(token: str) -> tuple[Optional[str], Optional[str], str, s
 
     m = re.match(r"^(rs\d+)$", token)
     if m:
-        return m.group(1), None, "rsid_only", "Presence/absence comparison available"
+        return m.group(1), None, "rsid_only", "Presence / absence comparison available"
 
     if token.startswith("chr"):
         return None, None, "coordinate_marker", "Coordinate-based marker; not directly matched because raw file is rsID-based"
@@ -111,12 +138,11 @@ def parse_marker_token(token: str) -> tuple[Optional[str], Optional[str], str, s
     return None, None, "other", "Unrecognized marker format"
 
 
-
 def normalize_dataset_lines(path: Path) -> list[str]:
     raw_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     cleaned = []
     i = 0
-    marker_hint = re.compile(r"(\s|\\t)(rs\S+|DRB\S+|A\*\S+|chr\S+|kgp\S+)$")
+    marker_hint = re.compile(r"(\s|\t)(rs\S+|DRB\S+|A\*\S+|chr\S+|kgp\S+)$")
     while i < len(raw_lines):
         line = raw_lines[i].strip()
         if not line:
@@ -136,55 +162,57 @@ def normalize_dataset_lines(path: Path) -> list[str]:
         i += 1
     return cleaned
 
+
 def parse_generic_dataset(path: Path) -> Dataset:
     rows = []
     fixed_category = DISPLAY_NAMES.get(path.name, path.stem)
     for line in normalize_dataset_lines(path):
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("#") or "rsID/SNP" in line or "TRAIT" in line:
-                continue
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#") or "rsID/SNP" in line or "TRAIT" in line:
+            continue
 
-            entry_id = None
-            trait_label = fixed_category
-            marker = None
+        entry_id = None
+        trait_label = fixed_category
+        marker = None
 
-            parts = re.split(r"\t+", line)
+        parts = re.split(r"\t+", line)
 
-            if len(parts) >= 3 and parts[0].strip().isdigit():
-                entry_id = int(parts[0].strip())
-                trait_label = parts[1].strip() or fixed_category
-                marker = parts[2].strip()
+        if len(parts) >= 3 and parts[0].strip().isdigit():
+            entry_id = int(parts[0].strip())
+            trait_label = parts[1].strip() or fixed_category
+            marker = parts[2].strip()
+        else:
+            m = re.match(r"^(\d+)\s+(.+?)\s+(rs\S+|DRB\S+|A\*\S+|chr\S+|kgp\S+)$", line)
+            if m:
+                entry_id = int(m.group(1))
+                trait_label = m.group(2).strip() or fixed_category
+                marker = m.group(3).strip()
             else:
-                m = re.match(r"^(\d+)\s+(.+?)\s+(rs\S+|DRB\S+|A\*\S+|chr\S+|kgp\S+)$", line)
-                if m:
-                    entry_id = int(m.group(1))
-                    trait_label = m.group(2).strip() or fixed_category
-                    marker = m.group(3).strip()
+                if len(parts) >= 2:
+                    trait_label = parts[0].strip() or fixed_category
+                    marker = parts[1].strip()
                 else:
-                    if len(parts) >= 2:
-                        trait_label = parts[0].strip() or fixed_category
-                        marker = parts[1].strip()
-                    else:
-                        marker = line.strip()
+                    marker = line.strip()
 
-            rsid, allele, marker_type, note = parse_marker_token(marker)
-            rows.append({
-                "entry_id": entry_id,
-                "category": fixed_category,
-                "trait_label": trait_label,
-                "raw_marker": marker,
-                "rsid": rsid,
-                "listed_allele": allele,
-                "marker_type": marker_type,
-                "note": note,
-            })
+        rsid, allele, marker_type, note = parse_marker_token(marker)
+        rows.append({
+            "entry_id": entry_id,
+            "category": fixed_category,
+            "trait_label": trait_label,
+            "raw_marker": marker,
+            "rsid": rsid,
+            "listed_allele": allele,
+            "marker_type": marker_type,
+            "note": note,
+        })
 
     df = pd.DataFrame(rows)
     if df.empty:
         df = pd.DataFrame(columns=["entry_id", "category", "trait_label", "raw_marker", "rsid", "listed_allele", "marker_type", "note"])
     return Dataset(path.name, fixed_category, df)
+
 
 def load_all_datasets() -> list[Dataset]:
     return [parse_generic_dataset(DATA_DIR / name) for name in DATASET_FILES if (DATA_DIR / name).exists()]
@@ -205,8 +233,7 @@ def parse_ancestry_file(uploaded_file) -> pd.DataFrame:
         except ValueError:
             continue
         rows.append((rsid.strip(), chrom.strip(), pos, a1.strip().upper(), a2.strip().upper()))
-    df = pd.DataFrame(rows, columns=["rsid", "chromosome", "position", "allele1", "allele2"])
-    return df
+    return pd.DataFrame(rows, columns=["rsid", "chromosome", "position", "allele1", "allele2"])
 
 
 def compare_dataset(dataset: Dataset, ancestry_df: pd.DataFrame) -> pd.DataFrame:
@@ -219,8 +246,8 @@ def compare_dataset(dataset: Dataset, ancestry_df: pd.DataFrame) -> pd.DataFrame
         )
 
     anc = ancestry_df.drop_duplicates("rsid").set_index("rsid")
-
     result_rows = []
+
     for _, row in df.iterrows():
         rsid = row["rsid"]
         allele = row["listed_allele"]
@@ -338,32 +365,30 @@ def build_summary(all_results: pd.DataFrame) -> pd.DataFrame:
             "match_pct_when_present": hit_pct,
         })
 
-    summary_df = pd.DataFrame(summaries).sort_values(["category"]).reset_index(drop=True)
-    return summary_df
+    return pd.DataFrame(summaries).sort_values(["category"]).reset_index(drop=True)
 
 
 def build_overall_metrics(summary_df: pd.DataFrame, all_results: pd.DataFrame) -> dict:
-    metrics = {
-        "Datasets loaded": int(summary_df["category"].nunique()) if not summary_df.empty else 0,
+    if summary_df.empty:
+        return {}
+    return {
+        "Datasets loaded": int(summary_df["category"].nunique()),
         "Total marker rows": int(len(all_results)),
-        "Directly comparable rows": int(summary_df["directly_comparable_rows"].sum()) if not summary_df.empty else 0,
-        "Present in volunteer file": int(summary_df["present_in_ancestry"].sum()) if not summary_df.empty else 0,
-        "Allele/marker hits": int((summary_df["listed_allele_present"] + summary_df["marker_present_no_allele"]).sum()) if not summary_df.empty else 0,
-        "Manual review rows": int(summary_df["manual_review_rows"].sum()) if not summary_df.empty else 0,
+        "Directly comparable rows": int(summary_df["directly_comparable_rows"].sum()),
+        "Present in volunteer file": int(summary_df["present_in_ancestry"].sum()),
+        "Allele / marker hits": int((summary_df["listed_allele_present"] + summary_df["marker_present_no_allele"]).sum()),
+        "Manual review rows": int(summary_df["manual_review_rows"].sum()),
     }
-    return metrics
 
 
 def make_excel_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, ancestry_df: pd.DataFrame) -> bytes:
     wb = Workbook()
     ws0 = wb.active
     ws0.title = "README"
+    used_names = {"README"}
 
     navy = PatternFill("solid", fgColor="13263A")
-    gold = PatternFill("solid", fgColor="D4AF37")
-    gray = PatternFill("solid", fgColor="EFEFEF")
     white_bold = Font(color="FFFFFF", bold=True)
-    black_bold = Font(color="000000", bold=True)
 
     ws0.merge_cells("A1:F1")
     ws0["A1"] = "NONMS Genetics Comparison Report"
@@ -382,24 +407,26 @@ def make_excel_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, ances
     ws0.sheet_view.showGridLines = False
 
     def add_df_sheet(name: str, df: pd.DataFrame):
-        ws = wb.create_sheet(name[:31])
+        safe_name = make_unique_sheet_name(name[:31], used_names)
+        ws = wb.create_sheet(safe_name)
         if df.empty:
             ws["A1"] = "No rows"
             return ws
         for c_idx, col in enumerate(df.columns, 1):
-            cell = ws.cell(1, c_idx, col)
+            cell = ws.cell(1, c_idx, clean_excel_value(col))
             cell.fill = navy
             cell.font = white_bold
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         for r_idx, row in enumerate(df.itertuples(index=False), 2):
             for c_idx, val in enumerate(row, 1):
-                ws.cell(r_idx, c_idx, val)
+                ws.cell(r_idx, c_idx, clean_excel_value(val))
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = f"A1:{get_column_letter(df.shape[1])}{ws.max_row}"
         ws.sheet_view.showGridLines = False
         for idx, col in enumerate(df.columns, start=1):
             width = max(len(str(col)) + 2, 12)
-            sample_vals = df[col].astype(str).head(200).tolist()
+            sample_vals = [clean_excel_value(v) for v in df[col].head(200).tolist()]
+            sample_vals = ["" if v is None else str(v) for v in sample_vals]
             if sample_vals:
                 width = max(width, min(42, int(max(len(v) for v in sample_vals) * 0.95) + 2))
             ws.column_dimensions[get_column_letter(idx)].width = min(max(width, 12), 45)
@@ -407,12 +434,8 @@ def make_excel_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, ances
 
     add_df_sheet("Category_Summary", summary_df)
     add_df_sheet("All_Results", all_results)
-
-    matched = all_results[all_results["comparison_status"].isin(["Listed allele present", "Marker present", "Possible exact multibase match"])]
-    add_df_sheet("Matched_Only", matched)
-
-    manual = all_results[all_results["manual_review"] != "No"]
-    add_df_sheet("Manual_Review", manual)
+    add_df_sheet("Matched_Only", all_results[all_results["comparison_status"].isin(["Listed allele present", "Marker present", "Possible exact multibase match"])])
+    add_df_sheet("Manual_Review", all_results[all_results["manual_review"] != "No"])
 
     for category in summary_df["category"].tolist():
         cat_df = all_results[all_results["category"] == category].copy()
@@ -489,7 +512,6 @@ def make_pdf_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, volunte
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     story.append(table)
-
     story.append(PageBreak())
 
     for category in summary_df["category"].tolist():
@@ -545,25 +567,246 @@ def load_datasets_cached():
     return load_all_datasets()
 
 
-def main():
-    st.set_page_config(page_title="NONMS Genetics Engine", layout="wide")
-    st.title("NONMS Genetics Engine")
+def inject_css():
     st.markdown("""
-### ⚠️ Privacy Notice
+    <style>
+    .stApp {
+        background:
+            radial-gradient(circle at top left, rgba(212, 175, 55, 0.09), transparent 28%),
+            radial-gradient(circle at top right, rgba(62, 108, 168, 0.10), transparent 22%),
+            linear-gradient(180deg, #06080D 0%, #0B0F17 45%, #090B10 100%);
+        color: #F4F1E8;
+    }
+    .block-container {
+        padding-top: 1.4rem;
+        padding-bottom: 2rem;
+        max-width: 1380px;
+    }
+    .hero-shell {
+        border: 1px solid rgba(212, 175, 55, 0.20);
+        background: linear-gradient(180deg, rgba(15,22,35,0.92), rgba(10,14,22,0.96));
+        border-radius: 22px;
+        padding: 1.4rem 1.5rem 1.15rem 1.5rem;
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset, 0 18px 44px rgba(0,0,0,0.35);
+        margin-bottom: 1rem;
+    }
+    .hero-kicker {
+        color: #D4AF37;
+        font-size: 0.78rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+    .hero-title {
+        font-size: 2.55rem;
+        line-height: 1.05;
+        font-weight: 800;
+        color: #F7F2E7;
+        margin: 0 0 0.35rem 0;
+    }
+    .hero-sub {
+        color: #B7C0D0;
+        font-size: 1rem;
+        margin-bottom: 1rem;
+        max-width: 860px;
+    }
+    .status-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.7rem;
+        margin-top: 1rem;
+    }
+    .status-card {
+        background: rgba(255,255,255,0.035);
+        border: 1px solid rgba(212, 175, 55, 0.15);
+        border-radius: 16px;
+        padding: 0.9rem 1rem;
+    }
+    .status-label {
+        color: #9FA9BA;
+        text-transform: uppercase;
+        font-size: 0.72rem;
+        letter-spacing: 0.10em;
+        margin-bottom: 0.3rem;
+    }
+    .status-value {
+        color: #F5F1E6;
+        font-size: 1.05rem;
+        font-weight: 700;
+    }
+    .notice-panel, .mission-panel {
+        border-radius: 18px;
+        padding: 1rem 1.05rem;
+        border: 1px solid rgba(212,175,55,0.16);
+        background: rgba(255,255,255,0.035);
+        height: 100%;
+    }
+    .panel-title {
+        color: #D4AF37;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 0.76rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+    .panel-body {
+        color: #D7DDEA;
+        font-size: 0.93rem;
+        line-height: 1.45;
+    }
+    .metric-shell {
+        background: linear-gradient(180deg, rgba(14,20,31,0.95), rgba(9,12,18,0.98));
+        border: 1px solid rgba(212,175,55,0.12);
+        border-radius: 18px;
+        padding: 0.2rem 0.35rem;
+        box-shadow: 0 10px 26px rgba(0,0,0,0.18);
+    }
+    div[data-testid="metric-container"] {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0.55rem 0.75rem 0.45rem 0.75rem;
+    }
+    div[data-testid="metric-container"] label {
+        color: #A9B3C4 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+        color: #F7F2E7 !important;
+    }
+    .section-shell {
+        border: 1px solid rgba(212,175,55,0.12);
+        background: rgba(255,255,255,0.03);
+        border-radius: 18px;
+        padding: 1rem 1rem 0.6rem 1rem;
+        margin-bottom: 1rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.65rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(212,175,55,0.10);
+        border-radius: 12px;
+        padding: 0.6rem 1rem;
+        color: #D5DDEB;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(212,175,55,0.12) !important;
+        color: #F5E7BC !important;
+    }
+    .small-callout {
+        font-size: 0.85rem;
+        color: #AAB4C5;
+    }
+    .footer-note {
+        color: #9CA7B9;
+        font-size: 0.83rem;
+        margin-top: 0.8rem;
+    }
+    @media (max-width: 900px) {
+        .hero-title { font-size: 2rem; }
+        .status-strip { grid-template-columns: 1fr 1fr; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-- Uploaded DNA files are processed temporarily and not stored  
-- This tool is for research and pattern exploration only  
-- Not intended for diagnosis or medical advice  
 
----
-""")
-    st.caption("Upload an AncestryDNA raw file and compare it against the bundled MS and pathway marker sets.")
+def signal_from_hit_pct(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "Insufficient data"
+    if value >= 75:
+        return "High alignment"
+    if value >= 45:
+        return "Moderate alignment"
+    return "Low alignment"
 
-    with st.expander("What is included in v3?", expanded=False):
+
+def render_hero(datasets: list[Dataset]):
+    st.markdown(f"""
+    <div class="hero-shell">
+        <div class="hero-kicker">Area 76 Command Center</div>
+        <div class="hero-title">NONMS Genetics Engine</div>
+        <div class="hero-sub">
+            Upload an AncestryDNA raw file and run a structured comparison against bundled MS and biological pathway marker sets.
+            This interface is designed as a clean command-center view: signal first, detail second.
+        </div>
+        <div class="status-strip">
+            <div class="status-card">
+                <div class="status-label">Datasets bundled</div>
+                <div class="status-value">{len(datasets)}</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Core layer</div>
+                <div class="status-value">MS GWAS + pathways</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Export formats</div>
+                <div class="status-value">PDF • Excel • CSV</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Mode</div>
+                <div class="status-value">Pattern comparison</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_top_panels():
+    col1, col2 = st.columns([1.08, 1], gap="large")
+    with col1:
+        st.markdown("""
+        <div class="notice-panel">
+            <div class="panel-title">Privacy Notice</div>
+            <div class="panel-body">
+                Uploaded DNA files are processed in-session for comparison and report generation. This tool is intended for
+                research and pattern exploration. It is not designed as a diagnosis, clinical interpretation, or medical advice.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div class="mission-panel">
+            <div class="panel-title">Mission Guardrails</div>
+            <div class="panel-body">
+                Treat outputs as signal mapping, not certainty. A marker match can support pattern exploration, but it does not
+                prove disease, rule disease out, or replace clinical review.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def main():
+    st.set_page_config(page_title="NONMS Genetics Engine", page_icon="🧬", layout="wide")
+    inject_css()
+
+    datasets = load_datasets_cached()
+    render_hero(datasets)
+    render_top_panels()
+
+    with st.expander("What is included in v4?", expanded=False):
         st.write(", ".join(DISPLAY_NAMES.get(name, name) for name in DATASET_FILES))
         st.info("This app performs literal marker comparison. It does not diagnose disease or produce a validated risk score.")
 
-    uploaded = st.file_uploader("Upload AncestryDNA raw .txt file", type=["txt"])
+    st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+    left, right = st.columns([1.25, 0.75], gap="large")
+    with left:
+        uploaded = st.file_uploader("Upload AncestryDNA raw .txt file", type=["txt"], help="Use the raw data text file exported from AncestryDNA.")
+    with right:
+        st.markdown("""
+        <div class="small-callout">
+        <strong>Recommended workflow</strong><br>
+        1. Upload raw file<br>
+        2. Review category summary<br>
+        3. Inspect matched rows and manual-review rows<br>
+        4. Export PDF or Excel report
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     if not uploaded:
         st.stop()
 
@@ -572,71 +815,147 @@ def main():
         st.error("No genotype rows could be parsed from the uploaded file.")
         st.stop()
 
-    datasets = load_datasets_cached()
+    all_categories = [d.category for d in datasets]
+    default_core = ["MS GWAS", "Methylation", "Mold / Fungus", "Autonomic Loop", "Molecular Mimicry", "Dysautonomia"]
+    default_selection = [c for c in default_core if c in all_categories] or all_categories
+
+    st.markdown('<div class="section-shell">', unsafe_allow_html=True)
     selected_categories = st.multiselect(
         "Datasets to include",
-        options=[d.category for d in datasets],
-        default=[d.category for d in datasets],
+        options=all_categories,
+        default=default_selection,
+        help="Choose the bundled signal layers you want included in this comparison run."
     )
-    datasets = [d for d in datasets if d.category in selected_categories]
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    datasets = [d for d in datasets if d.category in selected_categories]
     result_frames = [compare_dataset(d, ancestry_df) for d in datasets]
     all_results = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
     summary_df = build_summary(all_results) if not all_results.empty else pd.DataFrame()
     metrics = build_overall_metrics(summary_df, all_results) if not all_results.empty else {}
 
-    cols = st.columns(6)
-    for i, (label, value) in enumerate(metrics.items()):
-        cols[i % 6].metric(label, value)
+    if not metrics:
+        st.warning("No datasets were selected.")
+        st.stop()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Category Detail", "Matched Rows", "Downloads"])
+    metric_cols = st.columns(6, gap="small")
+    for i, (label, value) in enumerate(metrics.items()):
+        with metric_cols[i]:
+            st.markdown('<div class="metric-shell">', unsafe_allow_html=True)
+            st.metric(label, value)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    if not summary_df.empty:
+        summary_df = summary_df.copy()
+        summary_df["signal_call"] = summary_df["match_pct_when_present"].apply(signal_from_hit_pct)
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Command Summary",
+        "Category Detail",
+        "Matched Rows",
+        "Manual Review",
+        "Exports",
+    ])
 
     with tab1:
-        st.subheader("Category summary")
-        st.dataframe(summary_df, use_container_width=True)
-
-        if not summary_df.empty:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+        top_left, top_right = st.columns([1.1, 0.9], gap="large")
+        with top_left:
+            st.subheader("Signal board")
+            st.dataframe(
+                summary_df[[
+                    "category", "rows", "directly_comparable_rows", "present_in_ancestry",
+                    "listed_allele_present", "marker_present_no_allele",
+                    "manual_review_rows", "coverage_pct_of_comparable",
+                    "match_pct_when_present", "signal_call"
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        with top_right:
+            st.subheader("Presence vs missing")
             chart_df = summary_df.set_index("category")[["present_in_ancestry", "missing_from_ancestry", "manual_review_rows"]]
-            st.bar_chart(chart_df)
+            st.bar_chart(chart_df, use_container_width=True)
+            st.caption("Use this to see where the volunteer file covered the bundled markers and where the Ancestry array left gaps.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
         categories = summary_df["category"].tolist() if not summary_df.empty else []
         chosen = st.selectbox("Choose a category", categories) if categories else None
         if chosen:
             cat_df = all_results[all_results["category"] == chosen].copy()
-            st.dataframe(cat_df, use_container_width=True)
-            st.caption("Tip: focus on `comparison_status`, `genotype`, and `manual_review` first.")
+            cat_summary = summary_df[summary_df["category"] == chosen].iloc[0]
+            a, b, c = st.columns(3)
+            a.metric("Signal call", cat_summary["signal_call"])
+            b.metric("Coverage %", "-" if pd.isna(cat_summary["coverage_pct_of_comparable"]) else f"{cat_summary['coverage_pct_of_comparable']:.1f}%")
+            c.metric("Match % when present", "-" if pd.isna(cat_summary["match_pct_when_present"]) else f"{cat_summary['match_pct_when_present']:.1f}%")
+            st.dataframe(cat_df, use_container_width=True, hide_index=True)
+            st.caption("Focus first on comparison_status, genotype, listed_allele, and manual_review.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab3:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
         matched_df = all_results[all_results["comparison_status"].isin(["Listed allele present", "Marker present", "Possible exact multibase match"])].copy()
-        st.dataframe(matched_df, use_container_width=True)
+        st.subheader("Rows with direct positive signal")
+        st.dataframe(matched_df, use_container_width=True, hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab4:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+        manual_df = all_results[all_results["manual_review"] != "No"].copy()
+        st.subheader("Rows needing manual review")
+        st.dataframe(manual_df, use_container_width=True, hide_index=True)
+        st.caption("These rows typically involve HLA entries, composite markers, unknown alleles, or markers not directly testable from the uploaded raw file.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab5:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
         st.subheader("Export report files")
-        excel_bytes = make_excel_report(summary_df, all_results, ancestry_df)
-        pdf_bytes = make_pdf_report(summary_df, all_results, uploaded.name)
-        csv_zip_bytes = make_csv_zip(summary_df, all_results)
+        dl1, dl2, dl3 = st.columns(3)
 
-        st.download_button(
-            "Download Excel report (.xlsx)",
-            data=excel_bytes,
-            file_name="NONMS_Genetics_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        st.download_button(
-            "Download PDF summary (.pdf)",
-            data=pdf_bytes,
-            file_name="NONMS_Genetics_Report.pdf",
-            mime="application/pdf",
-        )
-        st.download_button(
-            "Download CSV bundle (.zip)",
-            data=csv_zip_bytes,
-            file_name="NONMS_Genetics_CSVs.zip",
-            mime="application/zip",
-        )
+        with dl1:
+            try:
+                excel_bytes = make_excel_report(summary_df, all_results, ancestry_df)
+                st.download_button(
+                    "Download Excel report (.xlsx)",
+                    data=excel_bytes,
+                    file_name="NONMS_Genetics_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"Excel export hit an error: {e}")
 
-        st.info("The PDF is a concise summary. The Excel export contains the full row-level detail.")
+        with dl2:
+            try:
+                pdf_bytes = make_pdf_report(summary_df, all_results, uploaded.name)
+                st.download_button(
+                    "Download PDF summary (.pdf)",
+                    data=pdf_bytes,
+                    file_name="NONMS_Genetics_Report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"PDF export hit an error: {e}")
+
+        with dl3:
+            try:
+                csv_zip_bytes = make_csv_zip(summary_df, all_results)
+                st.download_button(
+                    "Download CSV bundle (.zip)",
+                    data=csv_zip_bytes,
+                    file_name="NONMS_Genetics_CSVs.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"CSV export hit an error: {e}")
+
+        st.markdown('<div class="footer-note">The PDF is a concise command summary. The Excel export contains full row-level detail by category. If one export fails, the others remain available.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
