@@ -291,6 +291,97 @@ def parse_dna_file(uploaded_file) -> pd.DataFrame:
     df["source"] = detected_format or "Unknown"
     return df
 
+def canonicalize_genotype(allele1: str, allele2: str) -> str:
+    a1 = (allele1 or "").strip().upper()
+    a2 = (allele2 or "").strip().upper()
+    chars = sorted([c for c in [a1, a2] if c])
+    return "".join(chars) if chars else "--"
+
+
+def compare_vendor_files(file_a_df: pd.DataFrame, file_b_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    cols = ["rsid", "chromosome", "position", "allele1", "allele2", "genotype", "source"]
+    a = file_a_df[cols].drop_duplicates("rsid").copy()
+    b = file_b_df[cols].drop_duplicates("rsid").copy()
+
+    a["canonical_genotype"] = a.apply(lambda r: canonicalize_genotype(r["allele1"], r["allele2"]), axis=1)
+    b["canonical_genotype"] = b.apply(lambda r: canonicalize_genotype(r["allele1"], r["allele2"]), axis=1)
+
+    merged = a.merge(b, on="rsid", how="outer", suffixes=("_a", "_b"), indicator=True)
+
+    merged["discrepancy_type"] = "Match"
+    merged.loc[merged["_merge"] == "left_only", "discrepancy_type"] = "Only in first file"
+    merged.loc[merged["_merge"] == "right_only", "discrepancy_type"] = "Only in second file"
+    merged.loc[
+        (merged["_merge"] == "both") & (merged["canonical_genotype_a"] != merged["canonical_genotype_b"]),
+        "discrepancy_type"
+    ] = "Genotype mismatch"
+
+    merged["vendor_note"] = ""
+    merged.loc[merged["discrepancy_type"] == "Only in first file", "vendor_note"] = "Likely array coverage difference: SNP present on first chip only."
+    merged.loc[merged["discrepancy_type"] == "Only in second file", "vendor_note"] = "Likely array coverage difference: SNP present on second chip only."
+    merged.loc[merged["discrepancy_type"] == "Genotype mismatch", "vendor_note"] = (
+        "Shared rsID but different reported genotype. Could reflect no-call handling, strand/build conventions, platform QC, or a true vendor disagreement that needs manual review."
+    )
+
+    discrepancy_df = merged[merged["discrepancy_type"] != "Match"].copy()
+
+    summary_rows = [
+        {"metric": "Unique rsIDs in first file", "value": int(a["rsid"].nunique())},
+        {"metric": "Unique rsIDs in second file", "value": int(b["rsid"].nunique())},
+        {"metric": "Shared rsIDs", "value": int((merged["_merge"] == "both").sum())},
+        {"metric": "Exact genotype matches", "value": int((merged["discrepancy_type"] == "Match").sum())},
+        {"metric": "Only in first file", "value": int((merged["discrepancy_type"] == "Only in first file").sum())},
+        {"metric": "Only in second file", "value": int((merged["discrepancy_type"] == "Only in second file").sum())},
+        {"metric": "Genotype mismatches", "value": int((merged["discrepancy_type"] == "Genotype mismatch").sum())},
+    ]
+    summary_df = pd.DataFrame(summary_rows)
+
+    shared = int((merged["_merge"] == "both").sum())
+    mismatches = int((merged["discrepancy_type"] == "Genotype mismatch").sum())
+    match_rate = round(100 * (shared - mismatches) / shared, 2) if shared else None
+
+    summary = {
+        "shared_rsids": shared,
+        "match_rate_pct_on_shared": match_rate,
+        "only_in_first": int((merged["discrepancy_type"] == "Only in first file").sum()),
+        "only_in_second": int((merged["discrepancy_type"] == "Only in second file").sum()),
+        "genotype_mismatches": mismatches,
+    }
+    return merged, discrepancy_df, summary_df, summary
+
+
+def build_vendor_discrepancy_message(summary: dict, first_label: str, second_label: str) -> str:
+    shared = summary.get("shared_rsids", 0)
+    match_rate = summary.get("match_rate_pct_on_shared")
+    only_first = summary.get("only_in_first", 0)
+    only_second = summary.get("only_in_second", 0)
+    mismatches = summary.get("genotype_mismatches", 0)
+
+    parts = []
+    if shared:
+        parts.append(f"The two files share {shared:,} rsIDs.")
+    else:
+        parts.append("The two files do not appear to share any rsIDs, so the discrepancy is likely a parsing or file-selection issue.")
+
+    if match_rate is not None:
+        parts.append(f"Across shared rsIDs, the genotype agreement rate is {match_rate:.2f}%.")
+
+    if only_first or only_second:
+        parts.append(
+            f"The biggest difference is chip coverage: {first_label} has {only_first:,} rsIDs not seen in {second_label}, "
+            f"and {second_label} has {only_second:,} rsIDs not seen in {first_label}."
+        )
+
+    if mismatches:
+        parts.append(
+            f"There are {mismatches:,} direct genotype mismatches on shared rsIDs. Those deserve manual review because they are not explained by simple chip coverage alone."
+        )
+    else:
+        parts.append("There are no direct genotype mismatches on shared rsIDs, which suggests the discrepancy is mostly coverage-driven rather than contradictory calls.")
+
+    return " ".join(parts)
+
+
 def compare_dataset(dataset: Dataset, ancestry_df: pd.DataFrame) -> pd.DataFrame:
     df = dataset.frame.copy()
     if ancestry_df.empty:
@@ -1017,6 +1108,7 @@ def render_top_panels():
         """, unsafe_allow_html=True)
 
 
+
 def main():
     st.set_page_config(page_title="NONMS Genetics Engine", page_icon="🧬", layout="wide")
     inject_css()
@@ -1030,30 +1122,85 @@ def main():
         st.info("This app performs literal marker comparison. It does not diagnose disease or produce a validated risk score.")
 
     st.markdown('<div class="section-shell">', unsafe_allow_html=True)
-    left, right = st.columns([1.25, 0.75], gap="large")
+    left, middle, right = st.columns([1.1, 1.1, 0.8], gap="large")
     with left:
-        uploaded = st.file_uploader("Upload AncestryDNA or 23andMe raw .txt file", type=["txt"], help="Supports both AncestryDNA and 23andMe raw data exports.")
+        uploaded_primary = st.file_uploader(
+            "Upload first raw DNA file",
+            type=["txt"],
+            help="Supports both AncestryDNA and 23andMe raw data exports.",
+            key="uploaded_primary",
+        )
+    with middle:
+        uploaded_secondary = st.file_uploader(
+            "Upload second raw DNA file (optional)",
+            type=["txt"],
+            help="Add a second vendor file to compare 23andMe vs AncestryDNA coverage and genotype discrepancies.",
+            key="uploaded_secondary",
+        )
     with right:
         st.markdown("""
         <div class="small-callout">
         <strong>Recommended workflow</strong><br>
-        1. Upload raw file<br>
-        2. Review category summary<br>
-        3. Inspect matched rows and manual-review rows<br>
-        4. Export PDF or Excel report
+        1. Upload one or two raw DNA files<br>
+        2. Choose which file powers the marker comparison<br>
+        3. Review category summary<br>
+        4. If both files are loaded, inspect vendor discrepancy analysis<br>
+        5. Export PDF or Excel report
         </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if not uploaded:
+    if not uploaded_primary:
         st.stop()
 
-    ancestry_df = parse_dna_file(uploaded)
-    if ancestry_df.empty:
-        st.error("No genotype rows could be parsed from the uploaded file.")
+    primary_df = parse_dna_file(uploaded_primary)
+    if primary_df.empty:
+        st.error("No genotype rows could be parsed from the first uploaded file.")
         st.stop()
 
-    st.success(f"Detected file type: {ancestry_df['source'].iloc[0]}")
+    primary_label = f"{uploaded_primary.name} ({primary_df['source'].iloc[0]})"
+    secondary_df = pd.DataFrame()
+    secondary_label = None
+
+    vendor_compare_ready = False
+    if uploaded_secondary:
+        secondary_df = parse_dna_file(uploaded_secondary)
+        if secondary_df.empty:
+            st.error("No genotype rows could be parsed from the second uploaded file.")
+            st.stop()
+        secondary_label = f"{uploaded_secondary.name} ({secondary_df['source'].iloc[0]})"
+        vendor_compare_ready = True
+
+    status_cols = st.columns(2 if vendor_compare_ready else 1)
+    with status_cols[0]:
+        st.success(f"First file detected as: {primary_df['source'].iloc[0]}")
+    if vendor_compare_ready:
+        with status_cols[1]:
+            st.success(f"Second file detected as: {secondary_df['source'].iloc[0]}")
+
+    analysis_options = {primary_label: primary_df}
+    if vendor_compare_ready:
+        analysis_options[secondary_label] = secondary_df
+
+    st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+    analysis_label = st.radio(
+        "Choose which uploaded file should power the marker comparison engine",
+        options=list(analysis_options.keys()),
+        horizontal=True,
+    )
+    ancestry_df = analysis_options[analysis_label]
+    st.caption("The category summary, matched rows, manual review table, and exports below are based on the selected file.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    vendor_merged = pd.DataFrame()
+    discrepancy_df = pd.DataFrame()
+    vendor_summary_df = pd.DataFrame()
+    vendor_summary = {}
+    discrepancy_message = None
+
+    if vendor_compare_ready:
+        vendor_merged, discrepancy_df, vendor_summary_df, vendor_summary = compare_vendor_files(primary_df, secondary_df)
+        discrepancy_message = build_vendor_discrepancy_message(vendor_summary, primary_label, secondary_label)
 
     all_categories = [d.category for d in datasets]
     default_core = ["MS GWAS", "Methylation", "Mold / Fungus", "Autonomic Loop", "Molecular Mimicry", "Dysautonomia"]
@@ -1089,19 +1236,34 @@ def main():
         summary_df = summary_df.copy()
         summary_df["signal_call"] = summary_df["match_pct_when_present"].apply(signal_from_hit_pct)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab_labels = [
         "Command Summary",
         "Category Detail",
         "Matched Rows",
         "Manual Review",
-        "Exports",
-    ])
+    ]
+    if vendor_compare_ready:
+        tab_labels.append("Vendor Discrepancy")
+    tab_labels.append("Exports")
+
+    tabs = st.tabs(tab_labels)
+    tab_idx = 0
+    tab1 = tabs[tab_idx]; tab_idx += 1
+    tab2 = tabs[tab_idx]; tab_idx += 1
+    tab3 = tabs[tab_idx]; tab_idx += 1
+    tab4 = tabs[tab_idx]; tab_idx += 1
+    vendor_tab = None
+    if vendor_compare_ready:
+        vendor_tab = tabs[tab_idx]
+        tab_idx += 1
+    tab5 = tabs[tab_idx]
 
     with tab1:
         st.markdown('<div class="section-shell">', unsafe_allow_html=True)
         top_left, top_right = st.columns([1.1, 0.9], gap="large")
         with top_left:
             st.subheader("Signal board")
+            st.caption(f"Analysis source: {analysis_label}")
             st.dataframe(
                 summary_df[[
                     "category", "rows", "directly_comparable_rows", "present_in_ancestry",
@@ -1149,6 +1311,47 @@ def main():
         st.caption("These rows typically involve HLA entries, composite markers, unknown alleles, or markers not directly testable from the uploaded raw file.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    if vendor_tab is not None:
+        with vendor_tab:
+            st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+            st.subheader("23andMe vs Ancestry discrepancy board")
+            if discrepancy_message:
+                st.info(discrepancy_message)
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Shared rsIDs", f"{vendor_summary.get('shared_rsids', 0):,}")
+            k2.metric("Agreement on shared rsIDs", "-" if vendor_summary.get("match_rate_pct_on_shared") is None else f"{vendor_summary['match_rate_pct_on_shared']:.2f}%")
+            k3.metric("Only in first file", f"{vendor_summary.get('only_in_first', 0):,}")
+            k4.metric("Only in second file", f"{vendor_summary.get('only_in_second', 0):,}")
+
+            k5, _spacer = st.columns([1,3])
+            k5.metric("Genotype mismatches", f"{vendor_summary.get('genotype_mismatches', 0):,}")
+
+            left_summary, right_detail = st.columns([0.9, 1.1], gap="large")
+            with left_summary:
+                st.subheader("Vendor comparison summary")
+                st.dataframe(vendor_summary_df, use_container_width=True, hide_index=True)
+                chart_source = vendor_summary_df.set_index("metric")
+                st.bar_chart(chart_source, use_container_width=True)
+
+            with right_detail:
+                st.subheader("Discrepancy rows")
+                view = discrepancy_df[[
+                    "rsid",
+                    "discrepancy_type",
+                    "canonical_genotype_a",
+                    "canonical_genotype_b",
+                    "chromosome_a",
+                    "position_a",
+                    "chromosome_b",
+                    "position_b",
+                    "vendor_note",
+                ]].copy()
+                st.dataframe(view, use_container_width=True, hide_index=True)
+                st.caption("Interpretation rule: 'Only in first/second file' usually means chip coverage differences. 'Genotype mismatch' means both vendors reported the same rsID but with different genotype calls.")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
     with tab5:
         st.markdown('<div class="section-shell">', unsafe_allow_html=True)
         st.subheader("Export report files")
@@ -1159,9 +1362,10 @@ def main():
             help="Use the light version for printing and the dark version for on-screen presentation."
         )
 
-        dl1, dl2, dl3, dl4 = st.columns(4)
+        dl_columns = 5 if vendor_compare_ready else 4
+        cols = st.columns(dl_columns)
 
-        with dl1:
+        with cols[0]:
             try:
                 excel_bytes = make_excel_report(summary_df, all_results, ancestry_df)
                 st.download_button(
@@ -1174,9 +1378,9 @@ def main():
             except Exception as e:
                 st.error(f"Excel export hit an error: {e}")
 
-        with dl2:
+        with cols[1]:
             try:
-                pdf_bytes = make_pdf_report(summary_df, all_results, uploaded.name, report_style=report_style)
+                pdf_bytes = make_pdf_report(summary_df, all_results, analysis_label, report_style=report_style)
                 file_name = "NONMS_Genetics_Report_Print.pdf" if report_style.startswith("Print-Friendly") else "NONMS_Genetics_Report_CommandCenter.pdf"
                 label = "Download selected PDF (.pdf)"
                 st.download_button(
@@ -1189,9 +1393,9 @@ def main():
             except Exception as e:
                 st.error(f"PDF export hit an error: {e}")
 
-        with dl3:
+        with cols[2]:
             try:
-                pdf_light = make_pdf_report(summary_df, all_results, uploaded.name, report_style="Print-Friendly (light)")
+                pdf_light = make_pdf_report(summary_df, all_results, analysis_label, report_style="Print-Friendly (light)")
                 st.download_button(
                     "Download print PDF (.pdf)",
                     data=pdf_light,
@@ -1202,7 +1406,7 @@ def main():
             except Exception as e:
                 st.error(f"Print PDF export hit an error: {e}")
 
-        with dl4:
+        with cols[3]:
             try:
                 csv_zip_bytes = make_csv_zip(summary_df, all_results)
                 st.download_button(
@@ -1214,6 +1418,20 @@ def main():
                 )
             except Exception as e:
                 st.error(f"CSV export hit an error: {e}")
+
+        if vendor_compare_ready:
+            with cols[4]:
+                try:
+                    discrepancy_csv = discrepancy_df.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "Download discrepancy CSV",
+                        data=discrepancy_csv,
+                        file_name="NONMS_Vendor_Discrepancies.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.error(f"Vendor discrepancy export hit an error: {e}")
 
         st.markdown('<div class="footer-note">Use the print-friendly PDF for paper copies and doctor handouts. Use the dark command-center PDF for screen sharing, presentations, and brand-forward storytelling.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
