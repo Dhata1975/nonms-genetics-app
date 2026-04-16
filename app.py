@@ -218,23 +218,78 @@ def load_all_datasets() -> list[Dataset]:
     return [parse_generic_dataset(DATA_DIR / name) for name in DATASET_FILES if (DATA_DIR / name).exists()]
 
 
-def parse_ancestry_file(uploaded_file) -> pd.DataFrame:
+def parse_dna_file(uploaded_file) -> pd.DataFrame:
     rows = []
-    content = uploaded_file.getvalue().decode("utf-8", errors="ignore").splitlines()
-    for line in content:
-        if not line or line.startswith("#") or line.lower().startswith("rsid\t"):
-            continue
-        parts = line.split("\t")
-        if len(parts) != 5:
-            continue
-        rsid, chrom, pos, a1, a2 = parts
-        try:
-            pos = int(pos)
-        except ValueError:
-            continue
-        rows.append((rsid.strip(), chrom.strip(), pos, a1.strip().upper(), a2.strip().upper()))
-    return pd.DataFrame(rows, columns=["rsid", "chromosome", "position", "allele1", "allele2"])
+    content = uploaded_file.getvalue().decode("utf-8-sig", errors="ignore").splitlines()
 
+    detected_format = None
+
+    for raw_line in content:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            if "rsid" in line.lower() and "genotype" in line.lower():
+                detected_format = "23andMe"
+            continue
+
+        parts = line.split("\t")
+        if len(parts) == 1:
+            parts = re.split(r"\s+", line)
+
+        if len(parts) == 4:
+            rsid, chrom, pos, genotype = parts
+            if not (rsid.startswith("rs") or rsid.startswith("i")):
+                continue
+
+            try:
+                pos = int(pos)
+            except ValueError:
+                continue
+
+            genotype = genotype.strip().upper()
+            if genotype in {"", "--"}:
+                a1, a2 = "", ""
+            elif len(genotype) == 2:
+                a1, a2 = genotype[0], genotype[1]
+            elif len(genotype) == 1:
+                a1, a2 = genotype, ""
+            else:
+                continue
+
+            detected_format = detected_format or "23andMe"
+            rows.append((rsid.strip(), chrom.strip(), pos, a1, a2))
+
+        elif len(parts) == 5:
+            rsid, chrom, pos, a1, a2 = parts
+            if not (rsid.startswith("rs") or rsid.startswith("i")):
+                continue
+
+            try:
+                pos = int(pos)
+            except ValueError:
+                continue
+
+            a1 = a1.strip().upper()
+            a2 = a2.strip().upper()
+
+            if a1 == "0":
+                a1 = ""
+            if a2 == "0":
+                a2 = ""
+
+            detected_format = detected_format or "AncestryDNA"
+            rows.append((rsid.strip(), chrom.strip(), pos, a1, a2))
+
+    df = pd.DataFrame(rows, columns=["rsid", "chromosome", "position", "allele1", "allele2"])
+
+    if df.empty:
+        return pd.DataFrame(columns=["rsid", "chromosome", "position", "allele1", "allele2", "genotype", "source"])
+
+    df["genotype"] = df["allele1"].fillna("") + df["allele2"].fillna("")
+    df["source"] = detected_format or "Unknown"
+    return df
 
 def compare_dataset(dataset: Dataset, ancestry_df: pd.DataFrame) -> pd.DataFrame:
     df = dataset.frame.copy()
@@ -280,7 +335,7 @@ def compare_dataset(dataset: Dataset, ancestry_df: pd.DataFrame) -> pd.DataFrame
                 "genotype": None,
                 "listed_allele_copies": None,
                 "zygosity": None,
-                "comparison_status": "rsID not present in Ancestry file",
+                "comparison_status": "rsID not present in uploaded DNA file",
                 "manual_review": "Maybe",
             })
             continue
@@ -345,7 +400,7 @@ def build_summary(all_results: pd.DataFrame) -> pd.DataFrame:
         allele_present = int((grp["comparison_status"] == "Listed allele present").sum())
         marker_present = int((grp["comparison_status"] == "Marker present").sum())
         absent = int((grp["comparison_status"] == "Listed allele absent").sum())
-        missing = int((grp["comparison_status"] == "rsID not present in Ancestry file").sum())
+        missing = int((grp["comparison_status"] == "rsID not present in uploaded DNA file").sum())
         manual = int((grp["manual_review"] != "No").sum())
         comparable_found = int(((grp["marker_type"].isin(["rsid_single_allele", "rsid_only"])) & (grp["in_ancestry"].fillna(False))).sum())
         coverage_pct = round(100 * comparable_found / directly_comparable, 1) if directly_comparable else None
@@ -977,7 +1032,7 @@ def main():
     st.markdown('<div class="section-shell">', unsafe_allow_html=True)
     left, right = st.columns([1.25, 0.75], gap="large")
     with left:
-        uploaded = st.file_uploader("Upload AncestryDNA raw .txt file", type=["txt"], help="Use the raw data text file exported from AncestryDNA.")
+        uploaded = st.file_uploader("Upload AncestryDNA or 23andMe raw .txt file", type=["txt"], help="Supports both AncestryDNA and 23andMe raw data exports.")
     with right:
         st.markdown("""
         <div class="small-callout">
@@ -993,10 +1048,12 @@ def main():
     if not uploaded:
         st.stop()
 
-    ancestry_df = parse_ancestry_file(uploaded)
+    ancestry_df = parse_dna_file(uploaded)
     if ancestry_df.empty:
         st.error("No genotype rows could be parsed from the uploaded file.")
         st.stop()
+
+    st.success(f"Detected file type: {ancestry_df['source'].iloc[0]}")
 
     all_categories = [d.category for d in datasets]
     default_core = ["MS GWAS", "Methylation", "Mold / Fungus", "Autonomic Loop", "Molecular Mimicry", "Dysautonomia"]
@@ -1059,7 +1116,7 @@ def main():
             st.subheader("Presence vs missing")
             chart_df = summary_df.set_index("category")[["present_in_ancestry", "missing_from_ancestry", "manual_review_rows"]]
             st.bar_chart(chart_df, use_container_width=True)
-            st.caption("Use this to see where the volunteer file covered the bundled markers and where the Ancestry array left gaps.")
+            st.caption("Use this to see where the volunteer file covered the bundled markers and where the DNA array left gaps.")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
