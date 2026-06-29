@@ -1,3 +1,4 @@
+import os
 
 from __future__ import annotations
 
@@ -1322,6 +1323,242 @@ def render_top_panels():
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+
+
+# ----------------------------
+# Version 10 WGS / VCF support
+# ----------------------------
+
+import gzip
+import tempfile
+
+VCF_TARGET_RSIDS = {
+    "rs4957796": "FER candidate linked in sepsis-survival / vascular-barrier disease-tolerance literature",
+    "rs225014": "DIO2 Thr92Ala thermoregulation / tissue thyroid signaling marker",
+    "rs2549794": "ERAP2 ancient-selection / antigen-processing marker",
+    "rs2248374": "ERAP2 splice / expression marker",
+    "rs2548538": "ERAP2 linked marker",
+    "rs2066847": "NOD2 1007fs innate immune recognition marker",
+    "rs1800896": "IL10 immune-resolution cytokine marker",
+    "rs1800871": "IL10 promoter marker",
+    "rs1800872": "IL10 promoter marker",
+    "rs2230926": "TNFAIP3 / A20 immune-brake marker",
+    "rs231775": "CTLA4 immune-checkpoint marker",
+    "rs1024611": "CCL2 inflammatory recruitment marker",
+    "rs1800629": "TNF inflammatory signaling marker",
+    "rs1800795": "IL6 inflammatory signaling marker",
+    "rs4143094": "TLR4 innate immune marker",
+    "rs4986790": "TLR4 innate immune marker",
+    "rs4986791": "TLR4 innate immune marker",
+}
+
+VCF_GENE_MODULES = {
+    "Disease Tolerance / Sepsis Tradeoff": [
+        "FER", "HMOX1", "HP", "HFE", "SLC40A1", "CISH", "IL10", "TGFB1",
+        "TNFAIP3", "SOCS1", "SOCS3", "CTLA4", "PDCD1", "FOXO1", "FOXO3"
+    ],
+    "Thermoregulation / Thyroid Switch": [
+        "DIO2", "DIO3", "THRA", "THRB", "SLC16A2", "SLC16A10",
+        "TSHR", "TRH", "TRHR", "SECISBP2", "TPO", "TG", "TSHB"
+    ],
+    "Antigen Presentation / Ancient Selection": [
+        "ERAP1", "ERAP2", "HLA-A", "HLA-B", "HLA-C", "HLA-DRA",
+        "HLA-DRB1", "HLA-DQA1", "HLA-DQB1", "TAP1", "TAP2"
+    ],
+    "Innate Pathogen Recognition": [
+        "NOD2", "TLR1", "TLR2", "TLR4", "TLR6", "TLR9", "MYD88",
+        "CARD9", "CLEC7A", "NLRP3"
+    ],
+    "B-cell / Memory Immune Loop": [
+        "TNFSF13B", "TNFSF13", "TNFRSF13B", "TNFRSF13C", "CR2",
+        "CD40", "CD40LG", "IL7R", "IL2RA", "MS4A1"
+    ],
+    "Vascular / BBB Containment": [
+        "FER", "ICAM1", "VCAM1", "SELE", "CLDN5", "OCLN", "MMP9",
+        "NOS3", "VEGFA", "AQP4"
+    ],
+}
+
+def _open_uploaded_text_stream(uploaded_file):
+    """Return a readable text stream for Streamlit UploadedFile, supporting .vcf and .vcf.gz."""
+    name = uploaded_file.name.lower()
+    uploaded_file.seek(0)
+    if name.endswith(".gz"):
+        return gzip.open(uploaded_file, mode="rt", encoding="utf-8", errors="ignore")
+    return uploaded_file
+
+def _decode_line(raw):
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="ignore")
+    return raw
+
+def parse_vcf_genotype(sample_value, format_value):
+    """Extract GT from VCF FORMAT/sample fields."""
+    if not sample_value or not format_value:
+        return ""
+    keys = str(format_value).split(":")
+    vals = str(sample_value).split(":")
+    if "GT" not in keys:
+        return ""
+    idx = keys.index("GT")
+    if idx >= len(vals):
+        return ""
+    return vals[idx]
+
+def summarize_vcf_upload(uploaded_file, target_rsids=None, max_rows=50000):
+    """
+    Stream a VCF/VCF.gz file without loading it all into memory.
+    Returns:
+    - target hits for selected rsIDs
+    - basic counts
+    - limited preview rows
+    """
+    if target_rsids is None:
+        target_rsids = set(VCF_TARGET_RSIDS.keys())
+    else:
+        target_rsids = set(target_rsids)
+
+    hits = []
+    preview = []
+    total_variants = 0
+    rsid_variants = 0
+    sample_names = []
+    found_header = False
+
+    # Some Streamlit UploadedFile objects work with gzip.open directly; some do not.
+    # To be safe for large files, copy to a temporary file and stream from disk.
+    suffix = ".vcf.gz" if uploaded_file.name.lower().endswith(".gz") else ".vcf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        uploaded_file.seek(0)
+        while True:
+            chunk = uploaded_file.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp_path = tmp.name
+
+    try:
+        opener = gzip.open if suffix.endswith(".gz") else open
+        with opener(tmp_path, "rt", encoding="utf-8", errors="ignore") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                if not line:
+                    continue
+                if line.startswith("##"):
+                    continue
+                if line.startswith("#CHROM"):
+                    found_header = True
+                    header = line.lstrip("#").split("\t")
+                    if len(header) > 9:
+                        sample_names = header[9:]
+                    continue
+                if line.startswith("#"):
+                    continue
+
+                parts = line.split("\t")
+                if len(parts) < 8:
+                    continue
+
+                total_variants += 1
+                chrom, pos, vid, ref, alt, qual, filt, info = parts[:8]
+                fmt = parts[8] if len(parts) > 8 else ""
+                sample_val = parts[9] if len(parts) > 9 else ""
+                gt = parse_vcf_genotype(sample_val, fmt)
+                has_rsid = vid.startswith("rs")
+                if has_rsid:
+                    rsid_variants += 1
+
+                if len(preview) < 100:
+                    preview.append({
+                        "CHROM": chrom, "POS": pos, "ID": vid, "REF": ref, "ALT": alt,
+                        "GT": gt, "FILTER": filt
+                    })
+
+                # VCF ID can contain multiple IDs separated by semicolon.
+                ids = set(str(vid).split(";"))
+                matched = ids.intersection(target_rsids)
+                for rsid in matched:
+                    hits.append({
+                        "rsID": rsid,
+                        "Gene/Pathway Note": VCF_TARGET_RSIDS.get(rsid, ""),
+                        "CHROM": chrom,
+                        "POS": pos,
+                        "REF": ref,
+                        "ALT": alt,
+                        "Genotype_Code": gt,
+                        "FILTER": filt,
+                        "INFO_preview": info[:240],
+                    })
+
+                if max_rows and total_variants >= max_rows and not hits:
+                    # Continue only if user explicitly wants full scan; default should still scan full VCF for target hits.
+                    pass
+
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+    return {
+        "file_name": uploaded_file.name,
+        "found_header": found_header,
+        "sample_names": sample_names,
+        "total_variants_scanned": total_variants,
+        "rsid_variants_scanned": rsid_variants,
+        "target_hits": hits,
+        "preview": preview,
+    }
+
+def render_wgs_explorer():
+    st.markdown("## NONMS WGS / VCF Explorer")
+    st.write("Upload a Sequencing.com `.vcf` or `.vcf.gz` file. The app streams the file and checks candidate rsIDs without loading the full genome into memory.")
+    st.warning("This is research/education output, not medical interpretation. WGS files are large and may take several minutes to scan.")
+
+    with st.expander("Candidate rsIDs currently checked", expanded=False):
+        st.dataframe(pd.DataFrame([
+            {"rsID": k, "Why included": v} for k, v in VCF_TARGET_RSIDS.items()
+        ]), use_container_width=True)
+
+    with st.expander("Gene modules planned for full gene extraction", expanded=False):
+        module_rows = []
+        for module, genes in VCF_GENE_MODULES.items():
+            for gene in genes:
+                module_rows.append({"Module": module, "Gene": gene})
+        st.dataframe(pd.DataFrame(module_rows), use_container_width=True)
+
+    vcf_file = st.file_uploader(
+        "Upload Sequencing.com / WGS VCF file",
+        type=["vcf", "gz"],
+        key="v10_vcf_upload"
+    )
+
+    if vcf_file:
+        if st.button("Scan VCF for NONMS target rsIDs", type="primary"):
+            with st.spinner("Scanning VCF. Large WGS files can take several minutes..."):
+                summary = summarize_vcf_upload(vcf_file)
+
+            st.success(f"VCF scan complete: {summary['total_variants_scanned']:,} variants scanned.")
+            st.caption(f"rsID-bearing variants scanned: {summary['rsid_variants_scanned']:,}")
+
+            hits_df = pd.DataFrame(summary["target_hits"])
+            if hits_df.empty:
+                st.warning("No target rsIDs were found in this VCF scan. This can happen if IDs are missing, normalized differently, or stored without rsIDs.")
+            else:
+                st.markdown("### Target rsID hits")
+                st.dataframe(hits_df, use_container_width=True)
+                st.download_button(
+                    "Download VCF target hits CSV",
+                    data=hits_df.to_csv(index=False).encode("utf-8"),
+                    file_name="NONMS_VCF_Target_rsID_Hits.csv",
+                    mime="text/csv",
+                )
+
+            preview_df = pd.DataFrame(summary["preview"])
+            if not preview_df.empty:
+                with st.expander("VCF preview rows", expanded=False):
+                    st.dataframe(preview_df, use_container_width=True)
 
 
 def main():
