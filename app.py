@@ -220,7 +220,7 @@ def parse_generic_dataset(path: Path) -> Dataset:
 def discover_dataset_files() -> list[Path]:
     """Discover every .txt SNP panel in /data.
 
-    Version 8 is modular: future pathway panels can be added by dropping
+    Version 9 is modular: future pathway panels can be added by dropping
     a new .txt file into /data. No Python edit is required unless you want
     a custom display name or priority position.
     """
@@ -588,6 +588,203 @@ def draw_pdf_header_light(canvas, doc):
 
 
 
+
+
+# ----------------------------
+# Version 9 volunteer education layer
+# ----------------------------
+
+PATHWAY_PLAIN_ENGLISH = {
+    "Immunometabolic Core": {
+        "plain": "This section looks at genes connected to how the body links immune activity with energy use.",
+        "why": "NONMS studies this because inflammation, fatigue, repair, and metabolism often overlap in chronic illness."
+    },
+    "MPOA Network": {
+        "plain": "This section looks at genes connected to temperature control, stress response, sleep, and automatic body functions.",
+        "why": "NONMS studies this because the brain's control systems may influence heat sensitivity, fatigue, and recovery."
+    },
+    "Evolutionary Immune Network": {
+        "plain": "This section looks at genes that may connect ancient immune survival pressures with modern immune behavior.",
+        "why": "NONMS studies this because some immune traits that helped humans survive infections may also shape autoimmune risk today."
+    },
+    "ERAP2 / Ancient Selection": {
+        "plain": "This section looks at ERAP2, a gene involved in how the immune system shows threat signals to immune cells.",
+        "why": "ERAP2 is included because it has been discussed in research about past infection pressure and immune tradeoffs."
+    },
+    "DIO Thermoregulation": {
+        "plain": "This section looks at genes involved in thyroid signaling and tissue-level temperature regulation.",
+        "why": "NONMS studies this because heat sensitivity and energy regulation are major questions in MS and related conditions."
+    },
+    "MS GWAS": {
+        "plain": "This section compares your file with published MS-associated research markers.",
+        "why": "These markers do not diagnose MS. They help researchers look for patterns across many people."
+    },
+    "Methylation": {
+        "plain": "This section looks at genes involved in B vitamins, folate, methylation, and repair chemistry.",
+        "why": "NONMS studies this because methylation affects homocysteine, DNA regulation, nerve health, and cellular repair."
+    },
+    "Homocysteine": {
+        "plain": "This section looks at markers connected to homocysteine handling.",
+        "why": "Homocysteine matters because it can affect blood vessels, inflammation, and nervous system stress."
+    },
+    "Dysautonomia": {
+        "plain": "This section looks at genes connected to automatic body functions.",
+        "why": "These pathways may matter for heart rate, blood pressure, temperature control, digestion, and fatigue."
+    },
+    "Autonomic Loop": {
+        "plain": "This section looks at genes connected to stress chemistry and automatic nervous system signaling.",
+        "why": "NONMS studies this because stress signals can change energy use, immune activity, and symptom intensity."
+    },
+    "Molecular Mimicry": {
+        "plain": "This section looks at immune markers related to the idea that infections may sometimes confuse immune recognition.",
+        "why": "This is a research concept, not a conclusion about any one volunteer."
+    },
+}
+
+def safe_num(value, default=0):
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+def get_top_categories_for_summary(summary_df: pd.DataFrame, max_items: int = 5) -> list[str]:
+    if summary_df is None or summary_df.empty:
+        return []
+    ranked = summary_df.copy()
+    ranked["hits_total"] = ranked["listed_allele_present"].fillna(0) + ranked["marker_present_no_allele"].fillna(0)
+    preferred = [
+        "Immunometabolic Core",
+        "MPOA Network",
+        "Evolutionary Immune Network",
+        "DIO Thermoregulation",
+        "ERAP2 / Ancient Selection",
+        "MS GWAS",
+        "Methylation",
+        "Dysautonomia",
+    ]
+    ordered = []
+    for cat in preferred:
+        if cat in ranked["category"].values:
+            ordered.append(cat)
+    remaining = ranked.sort_values(["hits_total", "present_in_ancestry"], ascending=False)["category"].tolist()
+    for cat in remaining:
+        if cat not in ordered:
+            ordered.append(cat)
+    return ordered[:max_items]
+
+def build_plain_english_summary_paragraphs(summary_df: pd.DataFrame, all_results: pd.DataFrame) -> list[str]:
+    total_datasets = int(summary_df["category"].nunique()) if summary_df is not None and not summary_df.empty else 0
+    total_markers = int(len(all_results)) if all_results is not None else 0
+    total_present = int(summary_df["present_in_ancestry"].sum()) if summary_df is not None and not summary_df.empty else 0
+
+    paragraphs = [
+        "Thank you for participating in the NONMS research project. Your DNA is one piece of a much larger puzzle. This report looks for research markers in pathways related to immunity, energy regulation, temperature control, methylation, and nervous system balance.",
+        "This report is not a diagnosis. It cannot tell you whether you have MS or any other disease. A DNA marker is a clue, not a verdict. The purpose of this report is to help researchers compare patterns across volunteers.",
+        f"In this report, the app reviewed {total_datasets} research panels containing {total_markers} marker rows. Your uploaded DNA file contained data for {total_present} of those marker rows. When a marker is missing, it often means the DNA company did not test that exact SNP.",
+        "The most important idea is simple: one gene does not tell the whole story. NONMS looks at groups of genes working together in biological pathways. Those pathways may help researchers ask better questions about inflammation, fatigue, heat sensitivity, repair, and recovery.",
+    ]
+    return paragraphs
+
+def build_research_moment_text() -> list[str]:
+    return [
+        "Research Moment: DNA is not destiny. Your genes are more like a parts list. Health is influenced by genes, environment, infections, stress, nutrition, sleep, and many other factors.",
+        "Research Moment: A SNP is a single-letter difference in DNA. Most SNPs are common and harmless. Researchers study them because patterns across many SNPs may help explain how biological systems behave.",
+        "Research Moment: A missing result usually does not mean the marker is absent from your body. It usually means that specific DNA testing company did not include that SNP on its chip.",
+        "Research Moment: NONMS is especially interested in pathways, not isolated genes. Pathways help show how energy, immunity, temperature control, and repair may interact."
+    ]
+
+def add_volunteer_summary_pages(story, styles, summary_df: pd.DataFrame, all_results: pd.DataFrame, dark_mode: bool):
+    """Add Version 9 plain-English pages before the technical report."""
+    body_style = styles["BodyMode"]
+    heading_style = styles["HeadingMode"]
+    small_style = styles["SmallMode"]
+
+    story.append(Paragraph("Welcome to the NONMS Project", heading_style))
+    for para in build_plain_english_summary_paragraphs(summary_df, all_results):
+        story.append(Paragraph(para, body_style))
+        story.append(Spacer(1, 0.08 * inch))
+
+    story.append(Paragraph("How to Read This Report", heading_style))
+    how_to = [
+        "<b>Found / present</b> means the marker was seen in the uploaded DNA file.",
+        "<b>Missing</b> usually means the DNA company did not test that exact SNP.",
+        "<b>High alignment</b> means many markers in that panel were found in the uploaded file. It does not mean high disease risk.",
+        "<b>Manual review</b> means the marker may need closer inspection because of HLA markers, composite entries, unknown alleles, or chip limitations.",
+        "<b>Coverage</b> tells us how much of a panel could actually be checked from the uploaded DNA file."
+    ]
+    for item in how_to:
+        story.append(Paragraph("• " + item, body_style))
+    story.append(Spacer(1, 0.12 * inch))
+
+    moments = build_research_moment_text()
+    for moment in moments[:2]:
+        story.append(Paragraph(moment, small_style))
+        story.append(Spacer(1, 0.06 * inch))
+
+    story.append(PageBreak())
+
+    story.append(Paragraph("Your Genetic Story", heading_style))
+    story.append(Paragraph(
+        "The sections below explain the main research pathways in plain English. These are educational summaries. The full technical tables begin after this introduction.",
+        body_style
+    ))
+    story.append(Spacer(1, 0.10 * inch))
+
+    top_categories = get_top_categories_for_summary(summary_df, max_items=8)
+    for cat in top_categories:
+        info = PATHWAY_PLAIN_ENGLISH.get(cat, {
+            "plain": "This section looks at one of the research pathways included in the NONMS genetics engine.",
+            "why": "It is included to help researchers compare patterns across volunteers."
+        })
+        if summary_df is not None and not summary_df.empty and cat in summary_df["category"].values:
+            row = summary_df[summary_df["category"] == cat].iloc[0]
+            present = int(row["present_in_ancestry"])
+            rows = int(row["rows"])
+            hits = int(row["listed_allele_present"] + row["marker_present_no_allele"])
+            coverage = "-" if pd.isna(row["coverage_pct_of_comparable"]) else f"{row['coverage_pct_of_comparable']:.1f}%"
+            signal = str(row.get("signal_call", ""))
+        else:
+            present = rows = hits = 0
+            coverage = "-"
+            signal = ""
+
+        story.append(KeepTogether([
+            Paragraph(cat, heading_style),
+            Paragraph(info["plain"], body_style),
+            Paragraph(info["why"], body_style),
+            Paragraph(f"Research snapshot: {present} of {rows} marker rows were present in the uploaded file; {hits} positive marker signal(s) were found. Coverage: {coverage}. Signal call: {signal}.", small_style),
+            Spacer(1, 0.10 * inch),
+        ]))
+
+    story.append(PageBreak())
+
+    story.append(Paragraph("What We Studied", heading_style))
+    studied = [
+        ("Immune signaling", "How the body recognizes threats and communicates danger."),
+        ("Energy regulation", "How cells decide whether to spend energy, conserve energy, or repair."),
+        ("Temperature control", "How the body manages heat, thyroid signaling, and stress physiology."),
+        ("Methylation and B vitamins", "How the body handles repair chemistry, homocysteine, and cellular regulation."),
+        ("Nervous system balance", "How automatic body functions such as heart rate, temperature, sleep, and stress responses may be coordinated."),
+        ("Evolutionary immune traits", "How ancient survival pressures may have shaped immune patterns that researchers still study today."),
+    ]
+    for title, desc in studied:
+        story.append(Paragraph(f"<b>{title}</b>: {desc}", body_style))
+        story.append(Spacer(1, 0.06 * inch))
+
+    for moment in moments[2:]:
+        story.append(Spacer(1, 0.06 * inch))
+        story.append(Paragraph(moment, small_style))
+
+    story.append(Spacer(1, 0.12 * inch))
+    story.append(Paragraph(
+        "The next section begins the technical report. It keeps the detailed data so volunteers, researchers, and clinicians can go deeper after reading the summary.",
+        body_style
+    ))
+    story.append(PageBreak())
+
+
 def make_pdf_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, volunteer_filename: str, report_style: str = "Command Center (dark)") -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -688,6 +885,9 @@ def make_pdf_report(summary_df: pd.DataFrame, all_results: pd.DataFrame, volunte
     story.append(Paragraph("Mission Guardrails", styles["HeadingMode"]))
     story.append(Paragraph("Treat every match here as a pattern signal, not a conclusion. Marker presence can support hypothesis generation and cross-volunteer comparison, but it does not prove disease, rule disease out, or replace clinical interpretation.", styles["BodyMode"]))
     story.append(Spacer(1, 0.12 * inch))
+
+    # V9: add plain-English volunteer education pages before the technical tables.
+    add_volunteer_summary_pages(story, styles, summary_df, all_results, dark_mode)
 
     story.append(Paragraph("Executive Signal Board", styles["HeadingMode"]))
     summary_table_data = [["Category", "Rows", "Present", "Hits", "Coverage %", "Match %", "Signal Call"]]
@@ -857,7 +1057,7 @@ def make_csv_zip(summary_df: pd.DataFrame, all_results: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
-@st.cache_data
+@st.cache_resource
 def load_datasets_cached():
     return load_all_datasets()
 
@@ -1007,7 +1207,7 @@ def inject_css():
     }
 
 
-    /* V8.1 Export / widget contrast hotfix */
+    /* V9 Export / widget contrast hotfix */
     div.stDownloadButton > button,
     button[kind="secondary"],
     button[data-testid="baseButton-secondary"] {
@@ -1132,7 +1332,7 @@ def main():
     render_hero(datasets)
     render_top_panels()
 
-    with st.expander("What is included in Version 8?", expanded=False):
+    with st.expander("What is included in Version 9?", expanded=False):
         st.write(", ".join(d.category for d in datasets))
         st.info("This modular app discovers every .txt SNP panel in /data. It performs literal marker comparison only; it does not diagnose disease or produce a validated risk score.")
 
@@ -1195,13 +1395,55 @@ def main():
         summary_df = summary_df.copy()
         summary_df["signal_call"] = summary_df["match_pct_when_present"].apply(signal_from_hit_pct)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab_summary, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Volunteer Summary",
         "Command Summary",
         "Category Detail",
         "Matched Rows",
         "Manual Review",
         "Exports",
     ])
+
+
+    with tab_summary:
+        st.markdown('<div class="section-shell">', unsafe_allow_html=True)
+        st.subheader("Plain-English Volunteer Summary")
+        st.write("This section explains the report at a 7th-grade reading level. The detailed technical data is still available in the tabs that follow.")
+
+        total_datasets = int(summary_df["category"].nunique()) if not summary_df.empty else 0
+        total_markers = int(len(all_results)) if not all_results.empty else 0
+        total_present = int(summary_df["present_in_ancestry"].sum()) if not summary_df.empty else 0
+
+        st.markdown(f"""
+        <div class="notice-panel">
+            <div class="panel-title">What this report is</div>
+            <div class="panel-body">
+            This report reviewed <strong>{total_datasets}</strong> research panels containing <strong>{total_markers}</strong> marker rows.
+            Your uploaded DNA file contained data for <strong>{total_present}</strong> of those marker rows.
+            This is a research and education report, not a diagnosis.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("### How to read the results")
+        st.write("A marker match means the uploaded DNA file contained that SNP or listed allele. It does not prove disease. A missing marker usually means the DNA company did not test that SNP.")
+        st.write("NONMS looks at pathways — groups of genes that may work together — rather than treating one gene as the whole answer.")
+
+        st.markdown("### Your genetic story")
+        for cat in get_top_categories_for_summary(summary_df, max_items=8):
+            info = PATHWAY_PLAIN_ENGLISH.get(cat, {
+                "plain": "This panel is one of the research pathways included in the NONMS genetics engine.",
+                "why": "It is included to help researchers compare patterns across volunteers."
+            })
+            row = summary_df[summary_df["category"] == cat].iloc[0]
+            hits = int(row["listed_allele_present"] + row["marker_present_no_allele"])
+            present = int(row["present_in_ancestry"])
+            rows_total = int(row["rows"])
+            st.markdown(f"**{cat}**")
+            st.write(info["plain"])
+            st.caption(f"Research snapshot: {present} of {rows_total} marker rows were present; {hits} positive marker signal(s) were found. {info['why']}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
     with tab1:
         st.markdown('<div class="section-shell">', unsafe_allow_html=True)
