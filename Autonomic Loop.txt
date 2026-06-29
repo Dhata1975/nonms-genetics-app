@@ -1,0 +1,11 @@
+1	Stress Nexus Event	rs1360780
+2	Stress Nexus Event	rs110402
+3	Stress Nexus Event	rs242924
+4	Stress Nexus Event	rs7209436
+5	Stress Nexus Event	rs2267735
+6	Stress Nexus Event	rs4680
+7	Stress Nexus Event	rs1042713
+8	Stress Nexus Event	rs1042714
+9	Stress Nexus Event	rs1801253
+10	Stress Nexus Event	rs16147
+11	Stress Nexus Event	rs6265

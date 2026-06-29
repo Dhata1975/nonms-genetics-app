@@ -1,0 +1,2 @@
+1	Cardiomegaly	rs10927875
+2	Cardiomegaly	rs2234962

@@ -1,0 +1,3 @@
+1	ERAP2 Black Death Variant	rs2549794
+2	ERAP2 Expression Variant	rs2248374
+3	ERAP2 Haplotype Variant	rs2548538

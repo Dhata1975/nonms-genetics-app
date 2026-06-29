@@ -1,0 +1,12 @@
+1	PRKAA2 Energy Switch	rs2746342
+2	PRKAA2 Metabolic Regulation	rs2796498
+3	STK11 AMPK Activator	rs8111699
+4	PPARGC1A Mitochondrial Adaptation	rs8192678
+5	FOXO3 Survival Signaling	rs2802292
+6	UCP1 Thermogenesis	rs1800592
+7	ADRB3 Sympathetic Thermogenesis	rs4994
+8	DIO2 Tissue Thyroid Thermostat	rs225014
+9	MTHFR C677T	rs1801133
+10	MTHFR A1298C	rs1801131
+11	IL7R Multiple Sclerosis	rs6897932
+12	IL2RA Immune Regulation	rs2104286
