@@ -1,23 +1,39 @@
-# NONMS Local WGS Mode
+# NONMS Genome Research Lab — Local WGS Mode
 
-Use this folder on your own Windows computer for the 974 MB Sequencing.com WGS VCF.
+This version fixes the Sequencing.com nested-folder issue.
 
-## Option A: Local Streamlit Explorer
+You can paste either:
 
-1. Open this `local_wgs` folder.
-2. Double-click `RUN_LOCAL_WGS_APP.bat`.
-3. Your browser will open a local NONMS WGS Explorer.
-4. Confirm the VCF path.
-5. Click **Scan target rsIDs**.
+1. The outer folder path:
 
-## Option B: Direct target scan
+`C:\Users\dhata\Downloads\DhataHarris-SQV32F23-30x-WGS-Sequencing_com-02-02-26.snp-indel.genome.vcf`
 
-1. Open `RUN_TARGET_SCAN.bat` in Notepad.
-2. Confirm the `VCF_PATH` line matches your file path.
-3. Save it.
-4. Double-click `RUN_TARGET_SCAN.bat`.
+or
 
-Outputs will appear in:
+2. The actual inner file path:
+
+`C:\Users\dhata\Downloads\DhataHarris-SQV32F23-30x-WGS-Sequencing_com-02-02-26.snp-indel.genome.vcf\DhataHarris-SQV32F23-30x-WGS-Sequencing_com-02-02-26.snp-indel.genome.vcf`
+
+The app will automatically resolve the real VCF file.
+
+## Run local app
+
+Double-click:
+
+`RUN_LOCAL_WGS_APP.bat`
+
+Then click:
+
+1. **Validate genome path**
+2. **Scan target rsIDs**
+
+## Direct command-line scan
+
+Double-click:
+
+`RUN_TARGET_SCAN.bat`
+
+Outputs appear in:
 
 `local_wgs/output/`
 
@@ -29,6 +45,6 @@ Outputs will appear in:
 - NOD2 `rs2066847`
 - IL10 / TNFAIP3 / CTLA4 / TLR markers
 
-## Important
+## Note
 
-The first scan is rsID-based. If the VCF is not annotated with gene names, gene-symbol search may return no rows. That is normal. The next upgrade will add coordinate-based gene extraction.
+If no target rsID is found, that can mean the person is reference at that site and the VCF only lists non-reference variants, or the VCF IDs differ. The next upgrade will add coordinate-based checks for reference/no-call status.

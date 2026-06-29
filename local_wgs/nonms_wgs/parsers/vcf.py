@@ -52,10 +52,83 @@ GENE_MODULES = {
 }
 
 
+def resolve_vcf_path(input_path: str | Path) -> Path:
+    """
+    Accepts either:
+    - a direct .vcf / .vcf.gz file path
+    - a Sequencing.com export folder that may itself end in .vcf
+    - a folder containing a same-named .vcf file
+
+    Returns the actual file path to scan.
+    """
+    p = Path(str(input_path).strip().strip('"')).expanduser()
+
+    if p.is_file():
+        return p
+
+    if p.is_dir():
+        # Prefer exact child with same name.
+        same_name = p / p.name
+        if same_name.is_file():
+            return same_name
+
+        # Otherwise locate likely VCF files recursively.
+        candidates = []
+        for pattern in ("*.vcf", "*.vcf.gz"):
+            candidates.extend([x for x in p.rglob(pattern) if x.is_file()])
+
+        if candidates:
+            # Prefer largest VCF because the actual genome is usually huge.
+            candidates.sort(key=lambda x: x.stat().st_size, reverse=True)
+            return candidates[0]
+
+        raise FileNotFoundError(f"No .vcf or .vcf.gz file found inside folder: {p}")
+
+    # If user pasted outer folder path without quotes and it exists as same-name child.
+    parent = p.parent
+    if parent.exists() and parent.is_dir():
+        same_name = parent / p.name / p.name
+        if same_name.is_file():
+            return same_name
+
+    raise FileNotFoundError(f"VCF path not found: {p}")
+
+
+def validate_vcf(vcf_path: str | Path) -> dict:
+    p = resolve_vcf_path(vcf_path)
+    result = {
+        "resolved_path": str(p),
+        "size_bytes": p.stat().st_size,
+        "is_gzip": str(p).lower().endswith(".gz"),
+        "is_valid_vcf": False,
+        "fileformat": "",
+        "reference": "",
+        "source": "",
+        "first_lines": [],
+    }
+    opener = gzip.open if result["is_gzip"] else open
+    with opener(p, "rt", encoding="utf-8", errors="ignore") as fh:
+        for i, raw in enumerate(fh):
+            line = raw.rstrip("\n")
+            if i < 25:
+                result["first_lines"].append(line)
+            if line.startswith("##fileformat="):
+                result["fileformat"] = line.replace("##fileformat=", "")
+                result["is_valid_vcf"] = True
+            elif line.startswith("##reference="):
+                result["reference"] = line.replace("##reference=", "")
+            elif line.startswith("##source="):
+                result["source"] = line.replace("##source=", "")
+            if i >= 200:
+                break
+    return result
+
+
 def open_vcf(path: Path):
-    if str(path).lower().endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
-    return open(path, "rt", encoding="utf-8", errors="ignore")
+    resolved = resolve_vcf_path(path)
+    if str(resolved).lower().endswith(".gz"):
+        return gzip.open(resolved, "rt", encoding="utf-8", errors="ignore")
+    return open(resolved, "rt", encoding="utf-8", errors="ignore")
 
 
 def parse_gt(sample_value: str, format_value: str) -> str:
@@ -84,10 +157,17 @@ def gt_to_alleles(gt: str, ref: str, alt: str) -> str:
 
 def scan_targets(vcf_path: Path, targets: Optional[Iterable[str]] = None) -> tuple[list[dict], dict]:
     target_set = set(targets or DEFAULT_TARGETS.keys())
+    resolved = resolve_vcf_path(vcf_path)
     hits = []
-    stats = {"variants": 0, "rsid_variants": 0, "header_found": False, "samples": []}
+    stats = {
+        "resolved_path": str(resolved),
+        "variants": 0,
+        "rsid_variants": 0,
+        "header_found": False,
+        "samples": [],
+    }
 
-    with open_vcf(vcf_path) as fh:
+    with open_vcf(resolved) as fh:
         for raw in fh:
             line = raw.rstrip("\n")
             if not line:
@@ -137,13 +217,19 @@ def scan_gene_symbols_from_info(vcf_path: Path, gene_symbols: Iterable[str], max
     """
     Opportunistic gene extraction using gene symbols in the VCF INFO field.
     This works only if the VCF is annotated with gene names. If not annotated,
-    use the target-rsID scan first or annotate the VCF with external tools.
+    coordinate-based extraction is the next upgrade.
     """
+    resolved = resolve_vcf_path(vcf_path)
     genes = {g.upper() for g in gene_symbols}
     hits = []
-    stats = {"variants": 0, "gene_hits": 0, "note": "Searches gene symbols in INFO field; requires annotated VCF."}
+    stats = {
+        "resolved_path": str(resolved),
+        "variants": 0,
+        "gene_hits": 0,
+        "note": "Searches gene symbols in INFO field; requires annotated VCF."
+    }
 
-    with open_vcf(vcf_path) as fh:
+    with open_vcf(resolved) as fh:
         for raw in fh:
             line = raw.rstrip("\n")
             if not line or line.startswith("#"):
