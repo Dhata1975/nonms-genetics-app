@@ -1,0 +1,3 @@
+1	DIO2 Thr92Ala	rs225014
+2	DIO3 Regulatory Variant	rs945006
+3	DIO3 Regulatory Variant	rs1190716
